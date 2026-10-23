@@ -1,52 +1,41 @@
-# bookchaowalit-press-frontend — Product brief
+# Press Room — Product truth
 
-**Slug:** `bookchaowalit-website/bookchaowalit-press-frontend`  
-**Generated:** 2026-08-11 (bulk Book Dev closeout)  
-**Status:** starter / portfolio boundary
+> Inferred from the code and copy (no user interview). Checked against the portfolio card claims review
+> (`portfolio-site-web/docs/audits/CARD-CLAIMS-REVIEW-2026-10.md`, row `press`, evidence Prototype) on 2026-10-23.
 
-## Purpose
+## What it is
 
-Portfolio repository under Book Dev. This brief records ownership and the
-current honest status so the nested tree is not an empty shell in the task
-system.
+A client-only list of press mentions ("clippings") over browser-local data, seeded with two sample mentions.
 
-## Runnable path
+## Who it is for
 
-See `README.md` for install and run instructions when present.
+A portfolio visitor who wants to see a small record-keeping desk for mentions and pitches.
 
-## Limits
+## What works today
 
-- Not claimed as production-ready unless README and tests prove it.
-- Mobile smoke / emulator acceptance is separate and toolchain-dependent.
+1. Add a mention (title required; an empty detail becomes "No detail added") with status Published, Pitch or Archive.
+2. Search title, detail and status; delete a mention. The header and the stamp show the current clip count.
+3. The list is saved in localStorage and survives a reload; broken stored data is ignored and the samples are shown.
+4. `/api/mcp` answers JSON-RPC with `list_mentions` and `get_mention` over the two sample mentions (it cannot see
+   mentions added in a browser).
+5. Front-end and server errors go to Sentry (errors only, personal data stripped) when `NEXT_PUBLIC_SENTRY_DSN` is set.
 
-## Current product truth
+## What does not work (and must not be claimed)
 
-This is a browser-local press-kit desk for searching, adding, and deleting
-authored press mentions or asset notes. It does not publish a press page,
-upload files, sync with a newsroom, or connect to a CMS.
+- No downloadable media kit, media appearances with embeds, speaking topics or media contact form (claims removed
+  from the portfolio card in the 2026-10 review).
+- No upload, CMS, public feed, newsroom sync, editing, account or sync. No product analytics beyond Vercel Analytics.
 
-## Source README excerpt
+## Live URL and deploy state
 
-```
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+- Live: https://press.bookchaowalit.com (HTTP 200 on 2026-10-23).
+- The Vercel project `bookchaowalit-press-frontend` is deployed only by CLI (last production 2026-10-23, CLI deploy
+  of commit 1042baa, the Next 16.4.2 security patch) and its Git link names the old repository
+  `bookchaowalit/bookchaowalit-press-frontend`, so a push to `main` does not deploy. The live site lags `main`
+  (no Sentry, template MCP route) until the owner reconnects Vercel Git to this repository (owner action D9).
+  `NEXT_PUBLIC_SENTRY_DSN` is already set on the Vercel project (Sentry project `content-press-web`, org
+  `personal-yu0`).
 
-## Getting Started
+## Boundaries
 
-First, run the development server:
-
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
-
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
-
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
-
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize an
-```
+- Browser-only apart from the stateless `/api/mcp` route.
