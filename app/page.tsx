@@ -1,46 +1,281 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { SEED, STATUSES, STORAGE_KEY, addItem, clipCount, parseItems, removeItem, searchItems, type PressStatus } from "@/lib/press";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { AppFoot, AppTop, ListButton, Pill, PlusIcon, type Tone } from "@/components/app-shell";
+import { EMPTY_DRAFT, SEED, STATUSES, STORAGE_KEY, createItem, filterItems, formatCreated, parseItems, restoreItem, type Draft, type PressItem, type PressStatus, type StatusFilter } from "@/lib/press";
 import { useStoredState } from "@/lib/use-stored-state";
 
-export default function Home() {
-  const [items, setItems] = useStoredState(STORAGE_KEY, SEED, parseItems);
-  const [query, setQuery] = useState("");
-  const [title, setTitle] = useState("");
-  const [body, setBody] = useState("");
-  const [status, setStatus] = useState<PressStatus>("Pitch");
-  const filtered = useMemo(() => searchItems(items, query), [items, query]);
+// nextShown / prevShown: the rows shown around it when it was removed, for putting focus back nearby.
+type RemovedEntry = { idea: PressItem; beforeId: string | null; nextShown?: string; prevShown?: string };
+type RemovedBatch = { items: RemovedEntry[]; viaKeyboard: boolean };
+const removedLabel = (items: RemovedEntry[]) => (items.length === 1 ? `Removed “${items[0].idea.title}”` : `Removed ${items.length} mentions`);
 
-  const addMention = () => {
-    if (!title.trim()) return;
-    const id = crypto.randomUUID();
-    setItems((current) => addItem(current, { title, body, status }, id, Date.now()));
-    setTitle(""); setBody(""); setStatus("Pitch");
-  };
+const TONE: Record<PressStatus, Tone> = { Published: "green", Pitch: "amber", Archive: "grey" };
+
+// randomUUID only exists in secure contexts (HTTPS/localhost) and newer browsers.
+function createId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  return `mention-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+// The row shows one line of the note (App shell rule); a long note gets Show more to read it in full.
+function MentionNote({ body }: { body: string }) {
+  const ref = useRef<HTMLParagraphElement>(null);
+  const id = useId();
+  const [expanded, setExpanded] = useState(false);
+  const [clipped, setClipped] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    // Measure only while collapsed: expanded, nothing is clipped, but Show less must stay.
+    const measure = () => { if (el.dataset.expanded !== "true") setClipped(el.scrollWidth > el.clientWidth); };
+    // Re-measure when the row resizes, and when web fonts arrive: a note that fit in the fallback font
+    // can overflow in Geist while the box keeps its size (ResizeObserver alone would miss it).
+    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(measure) : null;
+    observer?.observe(el);
+    const fonts = typeof document !== "undefined" ? document.fonts : undefined;
+    let live = true;
+    fonts?.ready?.then(() => { if (live) measure(); });
+    fonts?.addEventListener?.("loadingdone", measure);
+    return () => {
+      live = false;
+      observer?.disconnect();
+      fonts?.removeEventListener?.("loadingdone", measure);
+    };
+  }, [body]);
+  const long = expanded || clipped || body.includes("\n");
+  return (
+    <>
+      <p ref={ref} id={id} className="as-row-detail" data-expanded={expanded ? "true" : undefined}>{body}</p>
+      {long ? (
+        <button type="button" className="as-plain as-row-more" aria-expanded={expanded} aria-controls={id} onClick={() => setExpanded(!expanded)}>
+          {expanded ? "Show less" : "Show more"}
+        </button>
+      ) : null}
+    </>
+  );
+}
+
+export default function Home() {
+  const [ideas, setIdeas] = useStoredState(STORAGE_KEY, SEED, parseItems);
+  const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState<StatusFilter>("All");
+  const [composing, setComposing] = useState(false);
+  const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
+  // Every removal still inside the Undo window: one Undo puts them all back where they were.
+  const [removed, setRemovedState] = useState<RemovedBatch | null>(null);
+  // The latest batch, so two removals before a re-render still both land in it.
+  const removedRef = useRef<RemovedBatch | null>(null);
+  const setRemoved = (batch: RemovedBatch | null) => { removedRef.current = batch; setRemovedState(batch); };
+  const [toastFocused, setToastFocused] = useState(false);
+  const [announcement, setAnnouncement] = useState("");
+  const titleRef = useRef<HTMLInputElement>(null);
+  const newRef = useRef<HTMLButtonElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const undoRef = useRef<HTMLButtonElement>(null);
+  const toastRef = useRef<HTMLDivElement>(null);
+  const wasComposing = useRef(false);
+  const visible = useMemo(() => filterItems(ideas, filter, query), [ideas, filter, query]);
+  const countOf = (status: StatusFilter) => (status === "All" ? ideas.length : ideas.filter((idea) => idea.status === status).length);
+
+  // Opening the composer focuses its title; closing it returns focus to New mention (or the title, if
+  // the toast closes while the composer is open).
+  useEffect(() => {
+    if (composing) titleRef.current?.focus();
+    else if (wasComposing.current) newRef.current?.focus();
+    wasComposing.current = composing;
+  }, [composing]);
+  useEffect(() => { if (removed?.viaKeyboard) undoRef.current?.focus(); }, [removed]);
+  // When the toast closes, focus goes back near the removed row (once the list has re-rendered):
+  // the first of these rows still shown, else New mention (or the composer's title when it is open).
+  const focusRowsNext = useRef<string[] | null>(null);
+  useEffect(() => {
+    const ids = focusRowsNext.current;
+    if (removed || !ids) return;
+    focusRowsNext.current = null;
+    const rows = [...document.querySelectorAll<HTMLElement>(".as-row[data-idea]")];
+    const row = ids.map((id) => rows.find((entry) => entry.dataset.idea === id)).find(Boolean);
+    (row?.querySelector<HTMLButtonElement>(".as-danger") ?? newRef.current ?? titleRef.current)?.focus();
+  }, [removed, ideas]);
+  // While the toast shows, reserve its height (plus its 24px offset and a gap) at the bottom of the page and in
+  // scroll-padding, so a control focused behind it (Tab / Shift+Tab from Undo) scrolls clear instead of staying hidden.
+  const toastShown = removed !== null;
+  useLayoutEffect(() => {
+    const toast = toastRef.current;
+    if (!toastShown || !toast) return;
+    const rootStyle = document.documentElement.style;
+    const reserve = () => rootStyle.setProperty("--as-toast-space", `${toast.offsetHeight + 32}px`);
+    reserve();
+    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(reserve) : null;
+    observer?.observe(toast);
+    return () => { observer?.disconnect(); rootStyle.removeProperty("--as-toast-space"); };
+  }, [toastShown]);
+  // The toast closes 6 s after the latest removal (each removal restarts it), but never while it holds focus.
+  useEffect(() => {
+    if (!removed || toastFocused) return;
+    const timer = window.setTimeout(() => { removedRef.current = null; setRemovedState(null); }, 6000);
+    return () => window.clearTimeout(timer);
+  }, [removed, toastFocused]);
+
+  function add(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const idea = createItem(draft, createId(), Date.now());
+    if (!idea) return;
+    setIdeas((current) => [idea, ...current]);
+    // Show the new idea: its own list, and no search that might hide it.
+    if (filter !== "All" && filter !== idea.status) setFilter(idea.status);
+    setQuery("");
+    setAnnouncement(`Added “${idea.title}”.`);
+    setDraft(EMPTY_DRAFT);
+    setComposing(false);
+  }
+  function clearSearch() {
+    setQuery("");
+    searchRef.current?.focus();
+  }
+  function remove(idea: PressItem, viaKeyboard: boolean) {
+    // Read the idea and its neighbour from the stored list inside the same update, not from this render.
+    let entry: RemovedEntry | undefined;
+    setIdeas((current) => {
+      const index = current.findIndex((item) => item.id === idea.id);
+      if (index < 0) return current;
+      entry = { idea: current[index], beforeId: current[index + 1]?.id ?? null };
+      return current.filter((item) => item.id !== idea.id);
+    });
+    if (!entry) return;
+    const shownAt = visible.findIndex((item) => item.id === idea.id);
+    entry.nextShown = visible[shownAt + 1]?.id;
+    entry.prevShown = shownAt > 0 ? visible[shownAt - 1].id : undefined;
+    const items = [...(removedRef.current?.items ?? []), entry];
+    setRemoved({ items, viaKeyboard });
+    setAnnouncement(`${removedLabel(items)}. Undo is available for a few seconds.`);
+  }
+  function closeToast(focusIds?: string[]) {
+    const last = removedRef.current?.items.at(-1);
+    // Dismissed: the row after the removed one, else the one before it.
+    focusRowsNext.current = focusIds ?? [last?.nextShown, last?.prevShown].filter((id): id is string => Boolean(id));
+    setRemoved(null);
+    setToastFocused(false);
+  }
+  function undo() {
+    const items = removedRef.current?.items;
+    if (!items?.length) return;
+    // Latest removal first, so each idea goes back before the row that followed it at the time.
+    setIdeas((current) => items.reduceRight((list, { idea, beforeId }) => restoreItem(list, idea, beforeId), current));
+    setAnnouncement(items.length === 1 ? `Restored “${items[0].idea.title}”.` : `Restored ${items.length} mentions.`);
+    // Undone: back to the restored row (the latest one, where the user was last).
+    closeToast([items[items.length - 1].idea.id]);
+  }
+
+  const title = filter === "All" ? "All mentions" : filter;
+  const lists: { value: StatusFilter; tone?: Tone }[] = [{ value: "All" }, ...STATUSES.map((status) => ({ value: status, tone: TONE[status] }))];
 
   return (
-    <main className="press-shell">
-      <div className="press-frame">
-        <header className="press-topbar"><a href="https://bookchaowalit.com" className="press-mark" aria-label="Press / Room, Bookchaowalit home"><span>PRESS</span> / ROOM</a><span>MENTIONS / ASSET NOTES</span><span>{clipCount(items.length)}</span></header>
-        <section className="press-intro"><div><h1>Keep the proof<br /><em>in the room.</em></h1><p>A small desk for the mention, the useful detail, and the note that tells you what is still only a pitch.</p></div><div className="press-stamp" aria-hidden="true"><span>LOCAL</span><b>{String(items.length).padStart(2, "0")}</b><span>NO CMS</span></div></section>
+    <div className="as">
+      <a className="as-skip" href="#main">Skip to content</a>
+      <AppTop name="Press Room" tagline="Keep each mention easy to find" />
 
-        <section className="press-desk" aria-label="Press mention desk">
-          <aside className="press-index">
-            <div className="desk-head"><span>CLIP INDEX</span><span>{filtered.length} FOUND</span></div>
-            <label className="press-search"><span aria-hidden="true">/</span><span className="sr-only">Search mentions</span><input placeholder="Search mentions" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
-            <div className="clip-list">{filtered.length ? filtered.map((item, index) => <div className="clip-row" key={item.id}><span className="clip-number">{String(index + 1).padStart(2, "0")}</span><div><strong>{item.title}</strong><small>{item.status} / {item.body}</small></div><button type="button" aria-label={`Delete ${item.title}`} onClick={() => setItems((current) => removeItem(current, item.id))}>×</button></div>) : <p className="empty-clips">No clipping matches this search.</p>}</div>
-          </aside>
-          <section className="press-sheet">
-            <div className="desk-head"><span>NEW CLIPPING / FIELD NOTE</span><span>LOCAL ONLY</span></div>
-            <div className="sheet-body"><p className="field-label">ADD TO THE INDEX</p><h2>Make a mention<br /><em>easy to find.</em></h2><p className="sheet-copy">Keep a clean title, one useful detail, and a state. This is a working record—not a published press page.</p>
-              <div className="press-form"><label><span>Title</span><input aria-label="Title" placeholder="Who said what?" value={title} onChange={(event) => setTitle(event.target.value)} /></label><label><span>Details</span><textarea aria-label="Details" placeholder="Link, angle, or asset note" value={body} onChange={(event) => setBody(event.target.value)} /></label><label><span>Status</span><select aria-label="Status" value={status} onChange={(event) => setStatus(event.target.value as PressStatus)}>{STATUSES.map((item) => <option key={item}>{item}</option>)}</select></label><button type="button" className="add-mention" onClick={addMention}>Add mention</button></div>
+      <div className="as-body">
+        <aside className="as-side" aria-label="Lists">
+          <h2>Lists</h2>
+          <ul className="as-lists">
+            {lists.map(({ value, tone }) => (
+              <ListButton key={value} label={value === "All" ? "All mentions" : value} count={countOf(value)} tone={tone} current={filter === value} onSelect={() => setFilter(value)} />
+            ))}
+          </ul>
+        </aside>
+
+        <main id="main" className="as-main">
+          <div className="as-head">
+            <div>
+              <h1>{title}</h1>
+              <p aria-live="polite">{visible.length} {visible.length === 1 ? "mention" : "mentions"}{query.trim() ? ` matching “${query.trim()}”` : ""}</p>
             </div>
-            <p className="boundary-note"><b>BROWSER LOCAL</b> / No upload, CMS, public feed, or newsroom sync is attached.</p>
-          </section>
-        </section>
-        <footer className="press-footer"><span>BOOK / DEV TOOLS</span><span>SEARCH · ADD · KEEP</span></footer>
+            <div className="as-tools">
+              <label className="as-search">
+                <span className="as-sr">Search mentions</span>
+                <input ref={searchRef} type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search" />
+              </label>
+              {composing ? null : <button ref={newRef} type="button" className="as-button" onClick={() => setComposing(true)}><PlusIcon />New mention</button>}
+            </div>
+          </div>
+
+          {composing ? (
+            <form className="as-composer" onSubmit={add} aria-label="New mention">
+              <label className="as-field">Title
+                <input ref={titleRef} value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder="Who said what?" autoComplete="off" />
+              </label>
+              <label className="as-field">Details
+                <textarea value={draft.body} onChange={(event) => setDraft({ ...draft, body: event.target.value })} placeholder="Link, angle, or asset note" />
+              </label>
+              <div className="as-composer-foot">
+                <div className="as-segmented-wrap">
+                  <span id="stage-label">Status</span>
+                  <div className="as-segmented" role="group" aria-labelledby="stage-label">
+                    {STATUSES.map((status) => (
+                      <button key={status} type="button" aria-pressed={draft.status === status} onClick={() => setDraft({ ...draft, status })}>{status}</button>
+                    ))}
+                  </div>
+                </div>
+                <div className="as-composer-actions">
+                  <button type="button" className="as-plain" onClick={() => { setComposing(false); setDraft(EMPTY_DRAFT); }}>Cancel</button>
+                  <button type="submit" className="as-button" disabled={!draft.title.trim()}>Add</button>
+                </div>
+              </div>
+            </form>
+          ) : null}
+
+          {visible.length ? (
+            <ul className="as-list" aria-label={title}>
+              {visible.map((idea) => (
+                <li className="as-row" key={idea.id} data-idea={idea.id}>
+                  <div>
+                    <h3>{idea.title}</h3>
+                    <MentionNote body={idea.body} />
+                    {idea.createdAt ? <p className="as-row-meta"><time dateTime={new Date(idea.createdAt).toISOString()}>{formatCreated(idea.createdAt)}</time></p> : null}
+                  </div>
+                  <Pill tone={TONE[idea.status]}>{idea.status}</Pill>
+                  <button type="button" className="as-plain as-danger" aria-label={`Remove ${idea.title}`} onClick={(event) => remove(idea, event.detail === 0)}>Remove</button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <div className="as-list as-empty">
+              {query.trim() ? (
+                <>
+                  <strong>Nothing matches</strong>
+                  No mention in {filter === "All" ? "your lists" : title} contains “{query.trim()}”.
+                  <div style={{ marginTop: 8 }}><button type="button" className="as-plain" onClick={clearSearch}>Clear search</button></div>
+                </>
+              ) : ideas.length === 0 ? (
+                <><strong>No mentions yet</strong>Press New mention to record the first one.</>
+              ) : (
+                <><strong>This list is empty</strong>No mention is marked {title} yet. Press New mention and pick {title} as the status to add one.</>
+              )}
+            </div>
+          )}
+
+          <p className="as-note">Saved in this browser only: no upload, CMS, public feed or newsroom sync. The two starting entries are examples of the format, not real coverage.</p>
+        </main>
       </div>
-    </main>
+
+      <p className="as-sr" role="status" aria-live="polite">{announcement}</p>
+      {removed ? (
+        <div
+          ref={toastRef}
+          className="as-toast"
+          role="group"
+          aria-label="Undo remove"
+          onFocus={() => setToastFocused(true)}
+          onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setToastFocused(false); }}
+          onKeyDown={(event) => { if (event.key === "Escape") closeToast(); }}
+        >
+          <span>{removedLabel(removed.items)}</span>
+          <button ref={undoRef} type="button" className="as-plain" onClick={undo} aria-label={removed.items.length === 1 ? "Undo remove" : `Undo remove of ${removed.items.length} mentions`}>Undo</button>
+        </div>
+      ) : null}
+
+      <AppFoot source="https://github.com/bookchaowalit-website/content-press-web" />
+    </div>
   );
 }

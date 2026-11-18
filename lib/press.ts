@@ -57,3 +57,30 @@ export function removeItem(items: PressItem[], id: string): PressItem[] {
 export function clipCount(count: number): string {
   return `${count} LOCAL ${count === 1 ? "CLIP" : "CLIPS"}`;
 }
+
+// App shell helpers (2026-11-19): the composer, lists, undo and dates.
+
+export type StatusFilter = PressStatus | "All";
+export const EMPTY_DRAFT: Draft = { title: "", body: "", status: "Pitch" };
+
+export function filterItems(items: PressItem[], filter: StatusFilter, query: string): PressItem[] {
+  return searchItems(items, query).filter((item) => filter === "All" || item.status === filter);
+}
+
+/** Build a new mention from the composer, or null when the title is blank. */
+export function createItem(draft: Draft, id: string, now: number): PressItem | null {
+  return addItem([], draft, id, now)[0] ?? null;
+}
+
+/** Undo a removal: put the mention back before the row that followed it, or at the end; never duplicates. */
+export function restoreItem(items: PressItem[], item: PressItem, beforeId: string | null): PressItem[] {
+  if (items.some((entry) => entry.id === item.id)) return items;
+  const at = beforeId ? items.findIndex((entry) => entry.id === beforeId) : -1;
+  return at < 0 ? [...items, item] : [...items.slice(0, at), item, ...items.slice(at)];
+}
+
+/** "18 Aug 2026" in UTC, or "" for the undated examples (createdAt 0). */
+export function formatCreated(timestamp: number): string {
+  if (!timestamp) return "";
+  return new Date(timestamp).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
+}

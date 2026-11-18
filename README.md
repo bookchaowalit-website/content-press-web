@@ -1,8 +1,9 @@
 # Press Room
 
-A browser-only clipping desk for press mentions: add a mention (title, one detail, status Published / Pitch /
-Archive), search title, detail and status, and delete. It starts with two sample mentions and is kept in this
-browser's localStorage.
+A browser-only clipping desk for press mentions on the shared App shell (see `APP-SHELL.md`): lists by status
+(Published / Pitch / Archive) with counts, search, a New mention composer (title, one detail, status), and Remove
+with a few seconds of Undo. It starts with two example mentions (marked as examples, not real coverage) and is
+kept in this browser's localStorage (`press-v1`, unchanged, so saved clippings still load).
 
 Live: https://press.bookchaowalit.com (deployed by Vercel CLI; it can lag `main`, see `PRODUCT.md`).
 
