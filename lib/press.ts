@@ -79,6 +79,14 @@ export function restoreItem(items: PressItem[], item: PressItem, beforeId: strin
   return at < 0 ? [...items, item] : [...items.slice(0, at), item, ...items.slice(at)];
 }
 
+// Date holds times within ±8.64e15 ms; a saved number outside that (e.g. 1e300) makes toISOString throw.
+const MAX_TIME = 8.64e15;
+
+/** The ISO time for a <time> element, or null for the undated examples (0) and timestamps that are not real dates. */
+export function addedIso(timestamp: number): string | null {
+  return timestamp && Number.isFinite(timestamp) && Math.abs(timestamp) <= MAX_TIME ? new Date(timestamp).toISOString() : null;
+}
+
 /** "18 Aug 2026" in UTC, or "" for the undated examples (createdAt 0). */
 export function formatCreated(timestamp: number): string {
   if (!timestamp) return "";

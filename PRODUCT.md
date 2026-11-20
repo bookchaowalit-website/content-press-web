@@ -26,6 +26,12 @@ A portfolio visitor who wants to see a small record-keeping desk for mentions an
   from the portfolio card in the 2026-10 review).
 - No upload, CMS, public feed, newsroom sync, editing, account or sync. No product analytics beyond Vercel Analytics.
 
+## Known limits
+
+- Two tabs: every add, remove and Undo reads the latest saved list and writes in one synchronous step, a change that
+  alters nothing writes nothing, and a save in another tab shows here through the `storage` event. There is no
+  cross-tab lock, so two tabs saving in the same instant can still lose one save (Codex report -93f29471aa).
+
 ## Live URL and deploy state
 
 - Live: https://press.bookchaowalit.com (HTTP 200 on 2026-10-23).

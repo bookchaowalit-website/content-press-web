@@ -338,3 +338,56 @@ describe("Undo toast keeps focused controls clear", () => {
     expect(css).toContain(".as { padding-bottom: var(--as-toast-space, 0px); }");
   });
 });
+
+describe("two tabs", () => {
+  const KEY = "press-v1";
+  const otherTab = { id: "other-tab", title: "Saved in another tab", body: "Added while this tab was open.", status: "Pitch", createdAt: 1710000000000 };
+  const base = [
+    { id: "1", title: "Local tech blog", body: "Featured interview", status: "Published", createdAt: 0 },
+    { id: "2", title: "Independent maker roundup", body: "Product note / pending", status: "Pitch", createdAt: 0 },
+  ];
+  const saved = () => JSON.parse(localStorage.getItem(KEY)!).map((i: { title: string }) => i.title);
+  function remount() {
+    act(() => root.unmount());
+    root = createRoot(host);
+    act(() => root.render(<Home />));
+  }
+  beforeEach(() => {
+    // This tab has read (and cached) the saved list before the other tab saves.
+    localStorage.setItem(KEY, JSON.stringify(base));
+    resetStoredCache();
+    remount();
+    expect(rows()).toEqual(["Local tech blog", "Independent maker roundup"]);
+    localStorage.setItem(KEY, JSON.stringify([otherTab, ...base]));
+  });
+
+  it("removing in a stale tab keeps the mention another tab saved", () => {
+    press($('[aria-label="Remove Local tech blog"]')!);
+    expect(saved()).toEqual(["Saved in another tab", "Independent maker roundup"]);
+  });
+
+  it("a save in another tab shows here on its storage event", () => {
+    act(() => { window.dispatchEvent(new StorageEvent("storage", { key: KEY })); });
+    expect(rows()).toContain("Saved in another tab");
+  });
+
+  it("an Undo with nothing to restore writes nothing", () => {
+    press($('[aria-label="Remove Local tech blog"]')!);
+    const restored = JSON.stringify([otherTab, ...base]);
+    localStorage.setItem(KEY, restored); // another tab already put it back
+    press(button("Undo"));
+    expect(localStorage.getItem(KEY)).toBe(restored);
+  });
+});
+
+describe("saved dates", () => {
+  it("a createdAt outside the Date range shows the row without a date instead of crashing", () => {
+    act(() => root.unmount());
+    localStorage.setItem("press-v1", JSON.stringify([{ id: "far", title: "Far future", body: "x", status: "Pitch", createdAt: 1e300 }]));
+    resetStoredCache();
+    root = createRoot(host);
+    act(() => root.render(<Home />));
+    expect(rows()).toEqual(["Far future"]);
+    expect(host.querySelector(".as-row time")).toBeNull();
+  });
+});
