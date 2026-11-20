@@ -31,6 +31,11 @@ A portfolio visitor who wants to see a small record-keeping desk for mentions an
 - Two tabs: every add, remove and Undo reads the latest saved list and writes in one synchronous step, a change that
   alters nothing writes nothing, and a save in another tab shows here through the `storage` event. There is no
   cross-tab lock, so two tabs saving in the same instant can still lose one save (Codex report -93f29471aa).
+- Undo when storage is full or blocked: the mentions come back on screen and a red note says they could not be saved
+  and will be gone after a reload; there is no retry button (free up site storage and add them again).
+- Undo after another tab removed the next mention: the restored one goes to the end of the list (A, B, C: remove A
+  here, B there, Undo gives C, A). Multi-tab only (Codex report -ef0dd1221d, P3).
+- Frozen 2026-11-20: later review findings are recorded here, not fixed.
 
 ## Live URL and deploy state
 

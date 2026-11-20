@@ -391,3 +391,29 @@ describe("saved dates", () => {
     expect(host.querySelector(".as-row time")).toBeNull();
   });
 });
+
+describe("Undo when storage is full", () => {
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  it("restores on screen but says, where it can be seen, that the restore was not saved", () => {
+    press($('[aria-label="Remove Local tech blog"]')!);
+    // A full storage: reads still work, every write throws.
+    const real = localStorage;
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => real.getItem(key),
+      setItem: () => { throw new DOMException("full", "QuotaExceededError"); },
+      removeItem: (key: string) => real.removeItem(key),
+    });
+    press(button("Undo"));
+    expect(rows()).toContain("Local tech blog");
+    expect(host.querySelector(".pr-unsaved")?.textContent).toContain("could not save the restored mentions");
+    expect(host.querySelector(".as-sr[role=status]")!.textContent).toContain("on this screen only");
+  });
+
+  it("a saved Undo shows no such notice", () => {
+    press($('[aria-label="Remove Local tech blog"]')!);
+    press(button("Undo"));
+    expect(host.querySelector(".pr-unsaved")).toBeNull();
+    expect(host.querySelector(".as-sr[role=status]")!.textContent).toBe("Restored “Local tech blog”.");
+  });
+});

@@ -46,11 +46,16 @@ export function readStored<T>(key: string, initial: T, parse: (raw: string | nul
   return result;
 }
 
-export function writeStored<T>(key: string, value: T) {
+/** Returns whether the value reached storage (false: kept in memory only, gone after a reload). */
+export function writeStored<T>(key: string, value: T): boolean {
   let raw: string | null = JSON.stringify(value);
+  let saved = true;
   try {
-    storage()?.setItem(key, raw);
+    const store = storage();
+    if (!store) saved = false;
+    store?.setItem(key, raw);
   } catch {
+    saved = false;
     // Storage can be full or blocked; the in-memory value still works for this visit. Cache it against the
     // text still in storage, so it is kept until another tab saves something new.
     const read = readRaw(key);
@@ -58,6 +63,7 @@ export function writeStored<T>(key: string, value: T) {
   }
   cache.set(key, { raw, value });
   listeners.get(key)?.forEach((listener) => listener());
+  return saved;
 }
 
 export function subscribeStored(key: string, listener: Listener) {
@@ -85,14 +91,14 @@ export function useStoredState<T>(key: string, initial: T, parse: (raw: string |
   const value = useSyncExternalStore(subscribe, () => readStored(key, initial, parse), () => initial);
   // The change is applied to the latest saved value (read from storage now, not the value this tab rendered),
   // and a change that returns the value it was given writes nothing, so a stale tab never saves over another
-  // tab's newer list. Returns the value now in effect.
+  // tab's newer list. Returns whether the change is saved (true when there was nothing to write; false when it
+  // could only be kept in memory because storage is full or blocked).
   const setValue = useCallback(
-    (next: T | ((previous: T) => T)): T => {
+    (next: T | ((previous: T) => T)): boolean => {
       const previous = readStored(key, initial, parse);
       const value = typeof next === "function" ? (next as (previous: T) => T)(previous) : next;
-      if (Object.is(value, previous)) return previous;
-      writeStored(key, value);
-      return value;
+      if (Object.is(value, previous)) return true;
+      return writeStored(key, value);
     },
     [key, initial, parse],
   );

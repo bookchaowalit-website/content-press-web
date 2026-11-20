@@ -8,6 +8,7 @@ import { useStoredState } from "@/lib/use-stored-state";
 // nextShown / prevShown: the rows shown around it when it was removed, for putting focus back nearby.
 type RemovedEntry = { idea: PressItem; beforeId: string | null; nextShown?: string; prevShown?: string };
 type RemovedBatch = { items: RemovedEntry[]; viaKeyboard: boolean };
+const UNSAVED = "This browser could not save the restored mentions, so they will be gone after a reload. Free up site storage and add them again to keep them.";
 const removedLabel = (items: RemovedEntry[]) => (items.length === 1 ? `Removed “${items[0].idea.title}”` : `Removed ${items.length} mentions`);
 
 const TONE: Record<PressStatus, Tone> = { Published: "green", Pitch: "amber", Archive: "grey" };
@@ -69,6 +70,7 @@ export default function Home() {
   const setRemoved = (batch: RemovedBatch | null) => { removedRef.current = batch; setRemovedState(batch); };
   const [toastFocused, setToastFocused] = useState(false);
   const [announcement, setAnnouncement] = useState("");
+  const [unsaved, setUnsaved] = useState<string | null>(null);
   const titleRef = useRef<HTMLInputElement>(null);
   const newRef = useRef<HTMLButtonElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -121,7 +123,7 @@ export default function Home() {
     event.preventDefault();
     const idea = createItem(draft, createId(), Date.now());
     if (!idea) return;
-    setIdeas((current) => [idea, ...current]);
+    if (setIdeas((current) => [idea, ...current])) setUnsaved(null);
     // Show the new idea: its own list, and no search that might hide it.
     if (filter !== "All" && filter !== idea.status) setFilter(idea.status);
     setQuery("");
@@ -161,8 +163,11 @@ export default function Home() {
     const items = removedRef.current?.items;
     if (!items?.length) return;
     // Latest removal first, so each idea goes back before the row that followed it at the time.
-    setIdeas((current) => items.reduceRight((list, { idea, beforeId }) => restoreItem(list, idea, beforeId), current));
-    setAnnouncement(items.length === 1 ? `Restored “${items[0].idea.title}”.` : `Restored ${items.length} mentions.`);
+    const saved = setIdeas((current) => items.reduceRight((list, { idea, beforeId }) => restoreItem(list, idea, beforeId), current));
+    const restored = items.length === 1 ? `Restored “${items[0].idea.title}”` : `Restored ${items.length} mentions`;
+    // Storage full or blocked: the rows are back on screen but not saved, so say so where it can be seen.
+    setUnsaved(saved ? null : UNSAVED);
+    setAnnouncement(saved ? `${restored}.` : `${restored} on this screen only. ${UNSAVED}`);
     // Undone: back to the restored row (the latest one, where the user was last).
     closeToast([items[items.length - 1].idea.id]);
   }
@@ -199,6 +204,8 @@ export default function Home() {
               {composing ? null : <button ref={newRef} type="button" className="as-button" onClick={() => setComposing(true)}><PlusIcon />New mention</button>}
             </div>
           </div>
+
+          {unsaved ? <p className="pr-unsaved">{unsaved}</p> : null}
 
           {composing ? (
             <form className="as-composer" onSubmit={add} aria-label="New mention">

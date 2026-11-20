@@ -2,3 +2,6 @@
 @import "./app-shell.css";
 
 html, body { margin: 0; background: var(--as-bg); }
+
+/* Shown when an Undo could only restore mentions on screen (storage full or blocked). --as-danger: 5.4:1 light, 6.4:1 dark. */
+.pr-unsaved { margin: 0 0 12px; color: var(--as-danger); font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
